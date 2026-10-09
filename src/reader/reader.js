@@ -8,7 +8,7 @@
 // ブラウザでもテスト（Node）でも動くように、画像は { data: RGBA, width, height } で受けとる。
 
 import { NONE, SOLID, DASH, makeView } from '../core/model.js';
-import { getTemplate, mmToUnit, CELL, TEMPLATES, DEFAULT_SETTINGS } from '../sheet/templates.js';
+import { getTemplate, mmToUnit, CELL, TEMPLATES, DEFAULT_SETTINGS, GRID_MAJOR, GRID_EDGE } from '../sheet/templates.js';
 import { decodeCode, CODE_CELLS, CODE_S0, CODE_DS } from '../sheet/code.js';
 import { toGray, estimateBackground, binarize, components, percentile } from './image.js';
 import { solveHomography, applyH, quadArea } from './geometry.js';
@@ -129,8 +129,10 @@ export function readSheet(img, opts = {}) {
   // 4. 線の読み取り
   const { ink, red } = inkMap(rect, rw, rh, R);
   const shift = gridShift(red, rw, rh, tpl, ox, oy, R);
-  const { drawing, uncertain, total } = readLines(ink, rw, rh, tpl, ox, oy, R, shift);
+  const { drawing, uncertain, total, stats } = readLines(ink, rw, rh, tpl, ox, oy, R, shift);
   if (!total) warnings.push('NO_LINES');
+  // 開発用: 読み取りのとちゅうの値（tools/readphoto.mjs などで使う）
+  const debug = opts.debug ? { ink, red, rw, rh, R, ox, oy, shift, ...stats } : undefined;
 
   return {
     ok: true,
@@ -141,6 +143,7 @@ export function readSheet(img, opts = {}) {
     warnings,
     pxPerMm,
     rectified: { data: toRGBA(rect, rw, rh), width: rw, height: rh, res: R, originMm: [ox, oy] },
+    debug,
   };
 }
 
@@ -398,7 +401,6 @@ function gridShift(red, rw, rh, tpl, ox, oy, R) {
  */
 function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
   const tol = Math.round(1.4 * R), cell = Math.round(CELL * R), end = Math.round(0.45 * R);
-  const rowMean = new Float32Array(2 * tol + 1);
   const sample = (along, across, vertical) => {
     const x = vertical ? across : along, y = vertical ? along : across;
     return x < 0 || y < 0 || x >= rw || y >= rh ? 0 : ink[x + y * rw];
@@ -410,22 +412,42 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
   const far = [7, 9, 11, 13].map((d) => Math.round((d * R) / 8));
   const outLimit = Math.round(0.7 * R);
   const fv = new Float32Array(8);
-  const measure = (a0, c0, vertical, out, at, outward) => {
-    const s0 = Math.round(a0), cc0 = Math.round(c0);
+  const W = 2 * tol + 1; // 断面のはば（線に直角な方向にさがす範囲）
+  const SKIP = -1; // 断面のうち、さがさない位置のしるし
+  // 線分の「断面」: 線に直角な方向の位置ごとの、線にそった平均のこさ。dst[at + o + tol]（o = -tol〜tol）。
+  // 印刷された方眼の線も、えんぴつの線も、ここに山として表れる。
+  const crossSection = (s0, cc0, vertical, outward, dst, at) => {
     const lo = outward < 0 ? -outLimit : -tol, hi = outward > 0 ? outLimit : tol;
-    for (let o = lo; o <= hi; o++) {
+    const len = cell - 2 * end;
+    for (let o = -tol; o <= tol; o++) {
+      if (o < lo || o > hi) { dst[at + o + tol] = SKIP; continue; }
       let sum = 0;
       for (let s = s0 + end; s < s0 + cell - end; s++) sum += sample(s, cc0 + o, vertical);
-      rowMean[o + tol] = sum;
+      dst[at + o + tol] = sum / len;
     }
-    let bo = 0, bv = -1;
+  };
+  // 線分のプロファイル（線にそった「こさ」の並び）を out に cell 個入れる。
+  // 断面から「ひな形」（何もかいていない線分の断面 ＝ 印刷された方眼の線）を引いたのこりが
+  // いちばん大きい位置を、えんぴつの線の位置とする。こさも、ひな形のぶんを引いてはかる。
+  // こうすると、写真で方眼の線がこく写っていても（とくに5マスごとの太い線）、えんぴつの線と区別できる。
+  const measure = (s0, cc0, vertical, outward, cs, ca, tm, out, at) => {
+    const lo = outward < 0 ? -outLimit : -tol, hi = outward > 0 ? outLimit : tol;
+    const rest = (o) => { const v = cs[ca + o + tol] - tm[o + tol]; return v > 0 ? v : 0; };
+    let bo = 0, bv = -1, tmMin = Infinity;
+    for (let o = lo; o <= hi; o++) if (tm[o + tol] < tmMin) tmMin = tm[o + tol];
     for (let o = lo + 1; o <= hi - 1; o++) {
-      const v = rowMean[o - 1 + tol] + rowMean[o + tol] + rowMean[o + 1 + tol] - Math.abs(o) * 0.006 * (cell - 2 * end);
+      const v = rest(o - 1) + rest(o) + rest(o + 1) - Math.abs(o) * 0.006;
       if (v > bv) { bv = v; bo = o; }
     }
+    // その位置での、印刷された方眼の線のこさ（紙の地より上のぶん）。3画素のはばで、位置を1画素ずつずらした3通り
+    const lim = (o) => (o < lo ? lo : o > hi ? hi : o);
+    const tm3 = (o) => (tm[lim(o - 1) + tol] + tm[lim(o) + tol] + tm[lim(o + 1) + tol]) / 3 - tmMin;
+    const p0 = tm3(bo - 1), p1 = tm3(bo), p2 = tm3(bo + 1);
     for (let s = 0; s < cell; s++) {
-      let m = 0;
-      for (let d = -2; d <= 2; d++) { const v = sample(s0 + s, cc0 + bo + d, vertical); if (v > m) m = v; }
+      // 線は3画素ほどのはば。少しのうねりをゆるして、±1 画素の中で、印刷の線より上のぶんがいちばん大きい所をとる
+      const a = sample(s0 + s, cc0 + bo - 2, vertical), b = sample(s0 + s, cc0 + bo - 1, vertical), c = sample(s0 + s, cc0 + bo, vertical);
+      const d = sample(s0 + s, cc0 + bo + 1, vertical), e = sample(s0 + s, cc0 + bo + 2, vertical);
+      const m = Math.max((a + b + c) / 3 - p0, (b + c + d) / 3 - p1, (c + d + e) / 3 - p2);
       let bgv;
       if (outward) {
         // 内側の行だけで地をはかる
@@ -441,6 +463,73 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
       out[at + s] = v > 0 ? v : 0;
     }
   };
+  // ひな形: まわり（3×3 区画 ＝ 15マス四方）の、同じ種類（細い線・5マスごとの太い線・わく）の線分の
+  // 断面の、位置ごとのまん中の値。ほとんどの線分には何もかいていないので、印刷された線だけが残る。
+  // レンズのピントは場所によってちがい、方眼の線のこさも場所によって変わるので、まわりだけで決める。
+  const BLOCK = 5;
+  const FRAME_GAIN = GRID_EDGE / GRID_MAJOR; // わくの線の太さ ÷ 5マスごとの線の太さ（前の用紙の 0.35 / 0.3 も、ほぼ同じ比）
+  const templates =(cs, n, clsOf, colRowOf, cols, rows) => {
+    const nbx = Math.ceil((cols + 1) / BLOCK), nby = Math.ceil((rows + 1) / BLOCK);
+    const lists = Array.from({ length: 3 * nbx * nby }, () => []);
+    const blockOf = new Int32Array(n);
+    for (let i = 0; i < n; i++) {
+      const [c, r] = colRowOf(i);
+      blockOf[i] = clsOf(i) * nbx * nby + Math.floor(c / BLOCK) + Math.floor(r / BLOCK) * nbx;
+      lists[blockOf[i]].push(i);
+    }
+    const byClass = [[], [], []];
+    for (let i = 0; i < n; i++) byClass[clsOf(i)].push(i);
+    const tms = lists.map(() => null);
+    const vals = [];
+    // まわり（reach 区画ぶん）の、種類 from の線分の断面から、位置ごとに「下から rank の割合」の値をとる。
+    // えんぴつの線がその上に長くかいてあってもまじらないように、まん中より下の値を使う。
+    const collect = (from, bx, by, reach, rank, fallback) => {
+      let ids = [];
+      for (let dy = -reach; dy <= reach; dy++)
+        for (let dx = -reach; dx <= reach; dx++) {
+          const xx = bx + dx, yy = by + dy;
+          if (xx < 0 || yy < 0 || xx >= nbx || yy >= nby) continue;
+          ids.push(...lists[from * nbx * nby + xx + yy * nbx]);
+        }
+      if (ids.length < 8) ids = byClass[from];
+      if (!ids.length) ids = fallback;
+      const step = Math.max(1, Math.floor(ids.length / 80));
+      const tm = new Float32Array(W), known = new Uint8Array(W);
+      let min = Infinity;
+      for (let o = 0; o < W; o++) {
+        vals.length = 0;
+        for (let k = 0; k < ids.length; k += step) { const v = cs[ids[k] * W + o]; if (v !== SKIP) vals.push(v); }
+        if (!vals.length) continue;
+        vals.sort((p, q) => p - q);
+        tm[o] = vals[Math.floor((vals.length - 1) * rank)];
+        known[o] = 1;
+        if (tm[o] < min) min = tm[o];
+      }
+      return { tm, known, min: min === Infinity ? 0 : min };
+    };
+    const make = (key) => {
+      const cls = Math.floor(key / (nbx * nby)), bx = key % nbx, by = Math.floor((key % (nbx * nby)) / nbx);
+      // 5マスごとの線は本数が少ないので、広めに集める
+      if (cls < 2) return collect(cls, bx, by, cls === 1 ? 2 : 1, 0.35, byClass[cls]).tm;
+      // わくの線: 図をわくのはしに合わせてかくと、線の上がえんぴつだらけになるので、
+      // わくの線どうしからは、ひな形をつくれない。同じ色で少し太いだけなので、
+      // 近くの「5マスごとの線」のひな形を、太さのぶんだけこくして使う。
+      // 位置だけは、同じわくの線の断面と重ねて合わせる（わくのはしでは、ずれの補正が少しあまいため）。
+      const major = collect(1, bx, by, 2, 0.35, byClass[2]);
+      const own = collect(2, bx, by, 3, 0.25, byClass[2]);
+      let best = 0, score = -Infinity;
+      for (let d = -3; d <= 3; d++) {
+        let s = 0;
+        for (let o = 0; o < W; o++) { const m = o - d; if (own.known[o] && m >= 0 && m < W) s += (own.tm[o] - own.min) * (major.tm[m] - major.min); }
+        s -= Math.abs(d) * 1e-4;
+        if (s > score) { score = s; best = d; }
+      }
+      const tm = new Float32Array(W);
+      for (let o = 0; o < W; o++) { const m = Math.min(W - 1, Math.max(0, o - best)); tm[o] = major.min + (major.tm[m] - major.min) * FRAME_GAIN; }
+      return tm;
+    };
+    return (i) => tms[blockOf[i]] || (tms[blockOf[i]] = make(blockOf[i]));
+  };
 
   const boxes = {};
   const mids = [[], [], []]; // 方眼の線の太さの種類ごとの、線分のまん中のこさ
@@ -450,20 +539,34 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
     const px = (b.x - ox) * R, pyBottom = (b.y + b.h - oy) * R;
     const nV = (b.cols + 1) * b.rows, nH = b.cols * (b.rows + 1);
     const profV = new Float32Array(nV * cell), profH = new Float32Array(nH * cell);
-    // 縦線: プロファイルは下から上へ
-    const tmp = new Float32Array(cell);
+    const lineCls = (c, last) => (c === 0 || c === last ? 2 : c % 5 === 0 ? 1 : 0); // 方眼の線の種類
+    const outside = (c, last, sign) => (c === 0 ? -sign : c === last ? sign : 0); // わくの外がどちら側か
+    // 線分ごとの位置（補正のずれをふくむ）と断面
+    const posV = new Int32Array(nV * 2), posH = new Int32Array(nH * 2);
+    const csV = new Float32Array(nV * W), csH = new Float32Array(nH * W);
     for (let q = 0; q < b.rows; q++)
       for (let c = 0; c <= b.cols; c++) {
+        const i = c + q * (b.cols + 1);
         const [sx, sy] = shift(name, px + c * CELL * R, pyBottom - (q + 0.5) * CELL * R);
-        measure(pyBottom - (q + 1) * CELL * R + sy, px + c * CELL * R + sx, true, tmp, 0, c === 0 ? -1 : c === b.cols ? 1 : 0);
-        const at = (c + q * (b.cols + 1)) * cell;
-        for (let s = 0; s < cell; s++) profV[at + s] = tmp[cell - 1 - s];
+        posV[i * 2] = Math.round(pyBottom - (q + 1) * CELL * R + sy); posV[i * 2 + 1] = Math.round(px + c * CELL * R + sx);
+        crossSection(posV[i * 2], posV[i * 2 + 1], true, outside(c, b.cols, 1), csV, i * W);
       }
     for (let c = 0; c <= b.rows; c++)
       for (let p = 0; p < b.cols; p++) {
+        const i = p + c * b.cols;
         const [sx, sy] = shift(name, px + (p + 0.5) * CELL * R, pyBottom - c * CELL * R);
-        measure(px + p * CELL * R + sx, pyBottom - c * CELL * R + sy, false, profH, (p + c * b.cols) * cell, c === 0 ? 1 : c === b.rows ? -1 : 0);
+        posH[i * 2] = Math.round(px + p * CELL * R + sx); posH[i * 2 + 1] = Math.round(pyBottom - c * CELL * R + sy);
+        crossSection(posH[i * 2], posH[i * 2 + 1], false, outside(c, b.rows, -1), csH, i * W);
       }
+    const tmV = templates(csV, nV, (i) => lineCls(i % (b.cols + 1), b.cols), (i) => [i % (b.cols + 1), Math.floor(i / (b.cols + 1))], b.cols, b.rows);
+    const tmH = templates(csH, nH, (i) => lineCls(Math.floor(i / b.cols), b.rows), (i) => [i % b.cols, Math.floor(i / b.cols)], b.cols, b.rows);
+    // 縦線: プロファイルは下から上へ
+    const tmp = new Float32Array(cell);
+    for (let i = 0; i < nV; i++) {
+      measure(posV[i * 2], posV[i * 2 + 1], true, outside(i % (b.cols + 1), b.cols, 1), csV, i * W, tmV(i), tmp, 0);
+      for (let s = 0; s < cell; s++) profV[i * cell + s] = tmp[cell - 1 - s];
+    }
+    for (let i = 0; i < nH; i++) measure(posH[i * 2], posH[i * 2 + 1], false, outside(Math.floor(i / b.cols), b.rows, -1), csH, i * W, tmH(i), profH, i * cell);
     boxes[name] = { b, profV, profH, nV, nH };
     const collect = (prof, n, clsOf) => {
       const mid = new Float32Array(cell - 2 * end);
@@ -481,6 +584,8 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
   const spread = mids.map((m, c) => percentile(m.map((v) => Math.abs(v - base[c])), 0.5));
   const hi = percentile(all, 0.995);
   const thrOf = (cls) => Math.max(base[cls] + Math.max(0.07, 5 * spread[cls]), 0.1, Math.min(0.33 * hi, 0.25));
+  // うすい線のしきい値（まわりの線とつながっているときだけ使う）
+  const lowOf = (cls) => Math.max(base[cls] + Math.max(0.04, 3 * spread[cls]), 0.5 * thrOf(cls));
 
   const drawing = {}, uncertain = {};
   let total = 0;
@@ -491,20 +596,96 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
     const unc = [];
     // (2) ある・なし
     const hasV = new Uint8Array(nV), hasH = new Uint8Array(nH);
+    // 1 = はっきりある, 2 = うすい（あるかもしれない）
     const presence = (prof, n, has, clsOf) => {
       for (let i = 0; i < n; i++) {
-        const thr = thrOf(clsOf(i));
-        let on = 0;
-        for (let s = end; s < cell - end; s++) if (prof[i * cell + s] > thr) on++;
+        const thr = thrOf(clsOf(i)), low = lowOf(clsOf(i));
+        let on = 0, faint = 0;
+        for (let s = end; s < cell - end; s++) { const v = prof[i * cell + s]; if (v > thr) on++; if (v > low) faint++; }
         if (on / (cell - 2 * end) >= 0.3) has[i] = 1;
+        else if (faint / (cell - 2 * end) >= 0.5) has[i] = 2;
       }
     };
     const clsV = (i) => { const c = i % (b.cols + 1); return c === 0 || c === b.cols ? 2 : c % 5 === 0 ? 1 : 0; };
     const clsH = (i) => { const c = Math.floor(i / b.cols); return c === 0 || c === b.rows ? 2 : c % 5 === 0 ? 1 : 0; };
     presence(profV, nV, hasV, clsV);
     presence(profH, nH, hasH, clsH);
-    const vAt = (c, q) => (c >= 0 && c <= b.cols && q >= 0 && q < b.rows ? hasV[c + q * (b.cols + 1)] : 0);
-    const hAt = (p, c) => (p >= 0 && p < b.cols && c >= 0 && c <= b.rows ? hasH[p + c * b.cols] : 0);
+    // まわりの線から「ある」と決めた線分（こさだけでは決められなかったもの）
+    const softV = new Uint8Array(nV), softH = new Uint8Array(nH);
+    const vAt = (c, q) => (c >= 0 && c <= b.cols && q >= 0 && q < b.rows ? hasV[c + q * (b.cols + 1)] === 1 : false);
+    const hAt = (p, c) => (p >= 0 && p < b.cols && c >= 0 && c <= b.rows ? hasH[p + c * b.cols] === 1 : false);
+    // うすい線分は、同じ直線の上で、はっきりした線にはさまれているときだけ「ある」とする
+    //（細いペンやうすいえんぴつの線は、とちゅうだけうすく写ることがある）。
+    // 線のはしでは、片がわがはっきりした線、もう片がわが直角の線とのかど、でもよい。
+    // 線を先へのばすことはしない（何もない所のむらを、線の続きと見まちがえないため）。
+    {
+      const upV = [], upH = [];
+      const corner = (c, q) => hAt(c - 1, q) || hAt(c, q); // 交点 (c, q) に、よこの線が来ているか
+      const cornerH = (p, c) => vAt(p, c - 1) || vAt(p, c); // 交点 (p, c) に、たての線が来ているか
+      for (let c = 0; c <= b.cols; c++)
+        for (let q = 0; q < b.rows; q++) {
+          if (hasV[c + q * (b.cols + 1)] !== 2) continue;
+          let e = q;
+          while (e + 1 < b.rows && hasV[c + (e + 1) * (b.cols + 1)] === 2) e++;
+          const below = vAt(c, q - 1), above = vAt(c, e + 1);
+          if (e - q < 3 && (below || above) && (below || corner(c, q)) && (above || corner(c, e + 1))) for (let k = q; k <= e; k++) upV.push(c + k * (b.cols + 1));
+          q = e;
+        }
+      for (let c = 0; c <= b.rows; c++)
+        for (let p = 0; p < b.cols; p++) {
+          if (hasH[p + c * b.cols] !== 2) continue;
+          let e = p;
+          while (e + 1 < b.cols && hasH[e + 1 + c * b.cols] === 2) e++;
+          const left = hAt(p - 1, c), right = hAt(e + 1, c);
+          if (e - p < 3 && (left || right) && (left || cornerH(p, c)) && (right || cornerH(e + 1, c))) for (let k = p; k <= e; k++) upH.push(k + c * b.cols);
+          p = e;
+        }
+      for (const i of upV) { hasV[i] = 1; softV[i] = 1; }
+      for (const i of upH) { hasH[i] = 1; softH[i] = 1; }
+    }
+    // とぎれた線をつなぐ: 線が、かどでもない所で終わっているとき（図面としては、ありえない終わり方）、
+    // そこから（まっすぐ、または直角に曲がって）ほかの線のある交点まで「何もないとは言いきれない」こさが
+    // 続いていれば、線が続いているとみなす。
+    // えんぴつの線が、印刷された方眼の線（とくに太い線やわくの線）とぴったり重なると、こさの差がほとんど出ないため。
+    // つないだ所は「あやしい線」としてしめす。
+    {
+      const mid = new Float32Array(cell - 2 * end);
+      const medOf = (prof, i) => { for (let s = end; s < cell - end; s++) mid[s - end] = prof[i * cell + s]; return percentile(mid, 0.5); };
+      const degree = (u, v) => (vAt(u, v - 1) ? 1 : 0) + (vAt(u, v) ? 1 : 0) + (hAt(u - 1, v) ? 1 : 0) + (hAt(u, v) ? 1 : 0);
+      // 交点 (u, v) から向き d（0: 上, 1: 下, 2: 右, 3: 左）へ出る線分
+      const DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      const segOf = (u, v, d) => {
+        if (d === 0) return v < b.rows ? { V: true, i: u + v * (b.cols + 1), cls: clsV(u) } : null;
+        if (d === 1) return v > 0 ? { V: true, i: u + (v - 1) * (b.cols + 1), cls: clsV(u) } : null;
+        if (d === 2) return u < b.cols ? { V: false, i: u + v * b.cols, cls: clsH(v * b.cols) } : null;
+        return u > 0 ? { V: false, i: u - 1 + v * b.cols, cls: clsH(v * b.cols) } : null;
+      };
+      const add = [];
+      for (let v = 0; v <= b.rows; v++)
+        for (let u = 0; u <= b.cols; u++) {
+          if (degree(u, v) !== 1) continue;
+          let best = null;
+          for (let d = 0; d < 4; d++) {
+            const first = segOf(u, v, d);
+            if (!first || (first.V ? hasV[first.i] : hasH[first.i]) === 1) continue; // 自分の線の向き
+            const gap = [];
+            let x = u, y = v, score = 0, ok = false;
+            while (gap.length < 40) {
+              const sg = segOf(x, y, d);
+              if (!sg) break;
+              const val = medOf(sg.V ? profV : profH, sg.i) - base[sg.cls], unit = Math.max(0.02, spread[sg.cls]);
+              if (val <= 0.5 * unit) break; // 何もない
+              gap.push(sg); score += val / (1.5 * unit);
+              x += DIRS[d][0]; y += DIRS[d][1];
+              if (degree(x, y) > 0) { ok = true; break; }
+            }
+            if (!ok || score / gap.length <= 1) continue;
+            if (!best || score / gap.length > best.score) best = { gap, score: score / gap.length };
+          }
+          if (best) add.push(...best.gap);
+        }
+      for (const sg of add) { if (sg.V) { hasV[sg.i] = 1; softV[sg.i] = 1; } else { hasH[sg.i] = 1; softH[sg.i] = 1; } }
+    }
 
     // (3) 区間ごとに実線・破線を決める
     const classify = (prof, ids, thrAbs, floor) => {
@@ -512,27 +693,51 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
       const raw = new Float32Array(len - 2 * mask);
       for (let k = 0; k < n; k++)
         for (let s = 0; s < cell; s++) { const t = k * cell + s - mask; if (t >= 0 && t < raw.length) raw[t] = prof[ids[k] * cell + s]; }
+      // マスの境目では、直角にまじわる印刷の方眼の線のせいで、こさが正しくはかれない
+      //（写真では方眼の線もこく写るので、そこだけ線が切れたように見える）。両どなりの値でうめる。
+      for (let k = 1; k < n; k++) {
+        const tb = k * cell - mask;
+        const fill = (raw[Math.max(0, tb - end - 1)] + raw[Math.min(raw.length - 1, tb + end)]) / 2;
+        for (let t = Math.max(0, tb - end); t < Math.min(raw.length, tb + end); t++) raw[t] = fill;
+      }
       // 線にそって少しならしてから、線のこさの6割より下がるところを「すき間」とする
       const vals = new Float32Array(raw.length);
       for (let t = 0; t < raw.length; t++) vals[t] = (raw[Math.max(0, t - 1)] + raw[t] + raw[Math.min(raw.length - 1, t + 1)]) / 3;
+      // 線のこさは、場所によって変わる（ピント・筆圧）。まわり（±1マス）のこさを基準にする。
       // floor: 印刷された方眼の線のこさ。すき間でもそこまでは下がらないので、その上で6割をはかる
-      const thr = Math.max(thrAbs, floor + 0.6 * (percentile(vals, 0.8) - floor));
-      let on = 0, gaps = 0, run = 0, seenOn = false;
+      const level = new Float32Array(vals.length);
+      // 短い区間では、かどにつけた点や、まじわる線のにじみに引っぱられないように、低めの位置の値をとる
+      if (vals.length <= 2 * cell) level.fill(percentile(vals, 0.65));
+      else for (let t = 0; t < vals.length; t++) level[t] = percentile(vals.subarray(Math.max(0, t - cell), Math.min(vals.length, t + cell + 1)), 0.8);
+      let on = 0, gaps = 0, run = 0, seenOn = false, onHead = 0;
+      const half = vals.length >> 1;
       for (let t = 0; t < vals.length; t++) {
+        const thr = Math.max(thrAbs, floor + 0.6 * (level[t] - floor));
         if (vals[t] > thr) {
           on++;
+          if (t < half) onHead++;
           if (seenOn && run >= minGap) gaps++; // 線と線にはさまれたすき間だけ数える
           run = 0; seenOn = true;
         } else run++;
       }
       const cover = on / vals.length;
+      // 区間の前半分・後ろ半分が、どれだけうまっているか（かどからはみ出した線を見分けるのに使う）
+      const halves = [onHead / Math.max(1, half), (on - onHead) / Math.max(1, vals.length - half)];
       const need = Math.max(1, Math.ceil(0.5 * n)); // 破線なら、1マスに1つ近くすき間がある
       let type;
       if (cover < 0.25) type = NONE;
       else if (cover < 0.8 || gaps >= need) type = DASH;
       else type = SOLID;
       const doubt = type !== NONE && ((type === SOLID && (cover < 0.9 || gaps > 0)) || (type === DASH && cover > 0.86 && gaps <= need));
-      return { type, doubt, cover };
+      return { type, doubt, cover, halves };
+    };
+    // 区間の線の種類。まわりの線から「ある」と決めた線分は、こさがあてにならないので、
+    // はっきりした線分だけで実線・破線を決める（全部がそうなら、しかたなく全部で決める）。
+    const typeOf = (prof, ids, soft, cls) => {
+      const firm = ids.filter((i) => !soft[i]);
+      const res = classify(prof, firm.length ? firm : ids, lowOf(cls), base[cls]);
+      if (firm.length < ids.length) { if (!res.type || !firm.length) res.type = SOLID; res.doubt = true; }
+      return res;
     };
     const spans = []; // { kind, line, from, to, type, doubt }
     for (let c = 0; c <= b.cols; c++) {
@@ -543,7 +748,7 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
         while (e < b.rows && vAt(c, e) && !hAt(c - 1, e) && !hAt(c, e)) e++;
         const ids = [];
         for (let k = q; k < e; k++) ids.push(c + k * (b.cols + 1));
-        spans.push({ kind: 'V', line: c, from: q, to: e, ...classify(profV, ids, thrOf(clsV(ids[0])), base[clsV(ids[0])]) });
+        spans.push({ kind: 'V', line: c, from: q, to: e, ...typeOf(profV, ids, softV, clsV(ids[0])) });
         q = e;
       }
     }
@@ -555,7 +760,7 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
         while (e < b.cols && hAt(e, c) && !vAt(e, c - 1) && !vAt(e, c)) e++;
         const ids = [];
         for (let k = p; k < e; k++) ids.push(k + c * b.cols);
-        spans.push({ kind: 'H', line: c, from: p, to: e, ...classify(profH, ids, thrOf(clsH(ids[0])), base[clsH(ids[0])]) });
+        spans.push({ kind: 'H', line: c, from: p, to: e, ...typeOf(profH, ids, softH, clsH(ids[0])) });
         p = e;
       }
     }
@@ -571,6 +776,18 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
       if (dashes === 2 || (dashes === 1 && sp.cover < 0.97)) { sp.type = DASH; sp.doubt = true; }
       else if (dashes === 1) sp.doubt = true;
     }
+    // 1マスだけの区間のうち、線ではないもの:
+    //   ・どちらのはしにも、ほかの線がない（紙のよごれ・写真のむら）
+    //   ・片方のはしだけがかどにつながっていて、線はかどの近くにしかない（定規でかどからはみ出した線）
+    for (const sp of spans) {
+      if (!sp.type || sp.to - sp.from !== 1) continue;
+      // 交点に来ている線の数（自分をふくむ）
+      const at = (u, v) => (vAt(u, v - 1) ? 1 : 0) + (vAt(u, v) ? 1 : 0) + (hAt(u - 1, v) ? 1 : 0) + (hAt(u, v) ? 1 : 0);
+      const head = sp.kind === 'V' ? at(sp.line, sp.from) : at(sp.from, sp.line), tail = sp.kind === 'V' ? at(sp.line, sp.to) : at(sp.to, sp.line);
+      if (head <= 1 && tail <= 1) { if (sp.type === DASH || sp.cover < 0.9) sp.type = NONE; continue; }
+      if (head > 1 && tail <= 1 && sp.halves[1] < 0.25) sp.type = NONE;
+      else if (tail > 1 && head <= 1 && sp.halves[0] < 0.25) sp.type = NONE;
+    }
     for (const sp of spans) {
       if (!sp.type) continue;
       for (let k = sp.from; k < sp.to; k++) {
@@ -582,5 +799,5 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
     drawing[name] = view;
     uncertain[name] = unc;
   }
-  return { drawing, uncertain, total };
+  return { drawing, uncertain, total, stats: { base, spread, hi, thr: [0, 1, 2].map(thrOf), boxes, cell, end } };
 }

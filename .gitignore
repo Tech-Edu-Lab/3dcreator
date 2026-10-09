@@ -12,3 +12,5 @@ desktop.ini
 # 手元だけで使うもの（公開しない）
 CLAUDE.md
 .claude/
+# 実物の写真（机の上のものなどが写っているので、公開しない）
+test/photos/

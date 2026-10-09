@@ -1,7 +1,7 @@
 // 方眼用紙にかくもの（四角・線・文字）のリストをつくる。
 // このリストから SVG（印刷・PDF・画像用）をつくる。テストでは同じリストから擬似的な写真をつくる。
 
-import { CELL, MARKER, MARGIN } from './templates.js';
+import { CELL, MARKER, MARGIN, GRID_MINOR, GRID_MAJOR, GRID_EDGE } from './templates.js';
 import { encodeCode, CODE_S0, CODE_DS, CODE_HEIGHT } from './code.js';
 
 export const GRID_TONES = {
@@ -49,17 +49,20 @@ export function sheetPrimitives(tpl, settings) {
   text(titleX, markers[0][1] + 1.6, 4.2, tpl.landscape ? '第三角法による正投影図　かきこみ用紙' : '第三角法による正投影図', { weight: 700 });
 
   // 方眼（わくごと）
+  // 線の太さ: 5マスごとの線とわくの線は、数えやすいように少しだけ太くする。
+  // 太くしすぎると、写真では灰色のこい線に写り、その上にかいた細いえんぴつの線と見分けにくくなる
+  //（はじめは 0.3 / 0.35mm だった。実物の写真でたしかめて細くした）。
   for (const name of ['top', 'front', 'side']) {
     const b = boxes[name];
     for (let u = 0; u <= b.cols; u++) {
       const edge = u === 0 || u === b.cols;
       const x = b.x + u * CELL;
-      line(x, b.y, x, b.y + b.h, edge ? 0.35 : u % 5 === 0 ? 0.3 : 0.15, grid);
+      line(x, b.y, x, b.y + b.h, edge ? GRID_EDGE : u % 5 === 0 ? GRID_MAJOR : GRID_MINOR, grid);
     }
     for (let v = 0; v <= b.rows; v++) {
       const edge = v === 0 || v === b.rows;
       const y = b.y + b.h - v * CELL;
-      line(b.x, y, b.x + b.w, y, edge ? 0.35 : v % 5 === 0 ? 0.3 : 0.15, grid);
+      line(b.x, y, b.x + b.w, y, edge ? GRID_EDGE : v % 5 === 0 ? GRID_MAJOR : GRID_MINOR, grid);
     }
   }
 

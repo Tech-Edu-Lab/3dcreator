@@ -11,6 +11,8 @@
 // わくとわくの間は1マス分あいている。四すみに位置合わせ用の■マークがある。
 
 export const CELL = 5; // 方眼1マスの大きさ (mm)
+// 方眼の線の太さ (mm): ふつうの線・5マスごとの線・わくの線
+export const GRID_MINOR = 0.15, GRID_MAJOR = 0.22, GRID_EDGE = 0.26;
 export const MARGIN = 10; // 紙のふちからマークまで (mm)
 export const MARKER = 10.5; // 四すみのマークの一辺 (mm)
 export const GRID_TOP = 25.5; // 方眼の上のはし (mm)

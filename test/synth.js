@@ -2,6 +2,7 @@
 
 import { sheetPrimitives } from '../src/sheet/layout.js';
 import { CODE_S0, CODE_DS, CODE_HEIGHT } from '../src/sheet/code.js';
+import { GRID_MAJOR, GRID_EDGE } from '../src/sheet/templates.js';
 import { CELL } from '../src/sheet/templates.js';
 import { solveHomography, applyH } from '../src/reader/geometry.js';
 import { SOLID, DASH } from '../src/core/model.js';
@@ -12,9 +13,13 @@ function hex(c) {
   return [(n >> 16) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
 
-/** 用紙を res 画素/mm でえがく（文字ははぶく）。mono=true で白黒印刷のつもり */
-export function rasterSheet(tpl, settings, res, { mono = false } = {}) {
+/**
+ * 用紙を res 画素/mm でえがく（文字ははぶく）。mono=true で白黒印刷のつもり。
+ * oldGrid=true で、はじめの版の用紙（5マスごとの線 0.3mm・わくの線 0.35mm と太かった）にする。
+ */
+export function rasterSheet(tpl, settings, res, { mono = false, oldGrid = false } = {}) {
   const { pageW, pageH, items } = sheetPrimitives(tpl, settings);
+  if (oldGrid) for (const it of items) if (it.t === 'line') it.sw = it.sw === GRID_MAJOR ? 0.3 : it.sw === GRID_EDGE ? 0.35 : it.sw;
   const w = Math.round(pageW * res), h = Math.round(pageH * res);
   const rgb = new Float32Array(w * h * 3).fill(1);
   const fillRect = (x0, y0, x1, y1, col) => {
@@ -143,7 +148,7 @@ export function drawPencil(raster, drawing, opts = {}) {
  *         lens(たるゆがみ), blur, noise, shade(明るさのむら 0〜0.5), seed }
  */
 export function photograph(raster, opts = {}) {
-  const { width = 1800, height = 1350, tilt = 0.03, rotate = 0, fill = 0.9, lens = 0, blur = 0.7, noise = 0.012, shade = 0.2, seed = 7, spin = 0 } = opts;
+  const { width = 1800, height = 1350, tilt = 0.03, rotate = 0, fill = 0.9, lens = 0, blur = 0.7, noise = 0.012, shade = 0.2, seed = 7, spin = 0, chroma = 0, sharpen = 0, tint = null } = opts;
   const r = rng(seed);
   const { w, h, rgb, res } = raster;
   const pw = w / res, ph = h / res;
@@ -199,6 +204,41 @@ export function photograph(raster, opts = {}) {
       out[(x + y * width) * 3 + c] = s / ks;
     }
   }
+  // 小さなカメラ（Chromebook など）のくせ:
+  //   chroma  … 色の情報が粗く、細い線の色がにじんで消える（水色の方眼が、灰色の線に写る）。にじむはば（画素）
+  //   sharpen … りんかくを強める処理（線のわきが、紙より明るくなる）
+  //   tint    … 色かぶり（[R, G, B] のかけ率）
+  if (chroma > 0 || sharpen > 0) {
+    const n = width * height;
+    const box = (src, rad) => {
+      const tmp = new Float32Array(n), dst = new Float32Array(n);
+      for (let y = 0; y < height; y++) {
+        let s = 0;
+        for (let i = -rad; i <= rad; i++) s += src[Math.min(width - 1, Math.max(0, i)) + y * width];
+        for (let x = 0; x < width; x++) { tmp[x + y * width] = s / (2 * rad + 1); s += src[Math.min(width - 1, x + rad + 1) + y * width] - src[Math.max(0, x - rad) + y * width]; }
+      }
+      for (let x = 0; x < width; x++) {
+        let s = 0;
+        for (let i = -rad; i <= rad; i++) s += tmp[x + Math.min(height - 1, Math.max(0, i)) * width];
+        for (let y = 0; y < height; y++) { dst[x + y * width] = s / (2 * rad + 1); s += tmp[x + Math.min(height - 1, y + rad + 1) * width] - tmp[x + Math.max(0, y - rad) * width]; }
+      }
+      return dst;
+    };
+    let luma = new Float32Array(n);
+    const ch = [new Float32Array(n), new Float32Array(n), new Float32Array(n)];
+    for (let i = 0; i < n; i++) {
+      luma[i] = 0.299 * out[i * 3] + 0.587 * out[i * 3 + 1] + 0.114 * out[i * 3 + 2];
+      for (let c = 0; c < 3; c++) ch[c][i] = out[i * 3 + c] - luma[i];
+    }
+    const soft = chroma > 0 ? ch.map((a) => box(a, Math.round(chroma))) : ch;
+    if (sharpen > 0) {
+      const wide = box(luma, 2), sharp = new Float32Array(n);
+      for (let i = 0; i < n; i++) sharp[i] = luma[i] + sharpen * (luma[i] - wide[i]);
+      luma = sharp;
+    }
+    for (let i = 0; i < n; i++) for (let c = 0; c < 3; c++) out[i * 3 + c] = luma[i] + soft[c][i];
+  }
+  if (tint) for (let i = 0; i < width * height; i++) for (let c = 0; c < 3; c++) out[i * 3 + c] *= tint[c];
   const data = new Uint8ClampedArray(width * height * 4);
   for (let i = 0; i < width * height; i++) {
     for (let c = 0; c < 3; c++) {

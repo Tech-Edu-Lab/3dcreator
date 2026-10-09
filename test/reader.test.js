@@ -6,9 +6,10 @@ import { encodeCode, decodeCode, encodeOldCode } from '../src/sheet/code.js';
 import { sheetSvg } from '../src/sheet/layout.js';
 import { readSheet } from '../src/reader/reader.js';
 import { analyze } from '../src/core/analyze.js';
-import { emptyDrawing } from '../src/core/drawing.js';
-import { rasterSheet, drawPencil, photograph, diffDrawings, repaintCode } from './synth.js';
-import { fromBoards, bookshelf, drawLine, DASH } from './helpers.js';
+import { emptyDrawing, drawingFromProblem } from '../src/core/drawing.js';
+import fs from 'node:fs';
+import { rasterSheet, drawPencil, photograph, diffDrawings, repaintCode, fromPNG } from './synth.js';
+import { fromBoards, bookshelf, drawLine, drawRect, DASH } from './helpers.js';
 
 const SETTINGS = { scaleMm: 10, boardMm: 12, thickness: 1, boardCheck: true, hiddenLines: 'needed', gridTone: 'normal' };
 // たな板2枚と仕切りのある本立て（かくれ線や、1マスだけの線が多い）。1マス10mmで はば300×奥行き150×高さ220
@@ -16,11 +17,13 @@ const SHELF = [...bookshelf(30, 15, 22), [1, 29, 2, 14, 8, 9], [1, 29, 1, 14, 15
 const SMALL = [...bookshelf(20, 9, 12), [1, 19, 2, 8, 5, 6], [9, 10, 1, 8, 1, 5]];
 
 /** 用紙に図面をかいて、写真にとる。tpl: 用紙の番号（3 = A3横） */
-function shoot({ tpl = 3, boards = SHELF, dims = [30, 15, 22], sheet = {}, pencil = {}, camera = {} } = {}) {
+function shoot({ tpl = 3, boards = SHELF, dims = [30, 15, 22], sheet = {}, pencil = {}, camera = {}, origin } = {}) {
   const t = getTemplate(tpl);
   const model = fromBoards(boards, ...dims, t.sizes);
+  // origin: 図をかく位置（わくの左下からのマス数）。指定しなければ、わくから2マスあける
+  if (origin) model.drawing = drawingFromProblem(model.P, t.sizes, origin);
   assert.ok(model.drawing, '図が用紙に入らない');
-  const raster = rasterSheet(t, { ...SETTINGS, ...sheet }, t.pageW > 300 || t.pageH > 300 ? 8 : 10, { mono: sheet.mono });
+  const raster = rasterSheet(t, { ...SETTINGS, ...sheet }, t.pageW > 300 || t.pageH > 300 ? 8 : 10, { mono: sheet.mono, oldGrid: sheet.oldGrid });
   drawPencil(raster, model.drawing, { seed: 3, ...pencil });
   const big = t.landscape ? { width: 2400, height: 1800 } : { width: 1800, height: 2400 };
   const photo = photograph(raster, { seed: 5, ...big, ...camera });
@@ -103,6 +106,13 @@ test('写真の読み取り（A3）: ふつうの写真で、線を1本もまち
   assert.equal(r.model.parts.length, 7);
 });
 
+// 小さなカメラ（Chromebook など）と、はじめの版の用紙（5マスごとの線が太い）、細いペン
+const CHROMEBOOK = {
+  sheet: { gridTone: 'dark', oldGrid: true },
+  pencil: { color: [0.3, 0.3, 0.34], thick: 0.3, dashThick: 0.3 },
+  camera: { width: 2592, height: 1944, chroma: 5, sharpen: 0.8, tint: [0.92, 0.9, 1.0], blur: 1.1 },
+};
+
 const CASES = [
   ['A3: 紙が90度回っている', { camera: { rotate: 1 } }],
   ['A3: 紙が逆さま', { camera: { rotate: 2 } }],
@@ -123,6 +133,12 @@ const CASES = [
   ['A4横・奥行き広めの用紙', { tpl: 1, boards: [...bookshelf(20, 10, 9), [9, 10, 1, 9, 1, 9]], dims: [20, 10, 9], camera: { width: 1800, height: 1350 } }],
   ['A4縦の用紙', { tpl: 2, boards: [...bookshelf(14, 9, 20), [1, 13, 2, 8, 9, 10]], dims: [14, 9, 20], camera: { width: 1350, height: 1800 } }],
   ['A4横: 解像度が低い (1024×768)', { tpl: 0, boards: SMALL, dims: [20, 9, 12], camera: { width: 1024, height: 768 } }],
+  // Chromebook のカメラで、実物の用紙をとったときのようす（2026-10 に先生がためした写真から）:
+  // 水色の方眼の色がにじんで灰色のこい線に写り、5マスごとの線は、細いペンの線と同じくらいのこさになる。
+  ['A3: 小さなカメラ（方眼が灰色にこく写る）・細いペン', { ...CHROMEBOOK }],
+  ['A3: 小さなカメラ・図をわくのはしに合わせてかいた', { ...CHROMEBOOK, origin: { u: 0, v: 0 } }],
+  ['A3: 小さなカメラ・方眼の太い線の上にぴったりかいた', { ...CHROMEBOOK, origin: { u: 5, v: 5 }, pencil: { ...CHROMEBOOK.pencil, jitter: 0 } }],
+  ['A3: 小さなカメラ・いまの用紙（太い線を細くした）', { ...CHROMEBOOK, sheet: { gridTone: 'dark' }, origin: { u: 5, v: 5 } }],
 ];
 for (const [name, o] of CASES) {
   test(`写真の読み取り: ${name}`, () => {
@@ -229,4 +245,23 @@ test('設定コードがよごれて読めないとき: 画面の設定で読む
   assert.equal(res.settings.hiddenLines, 'all');
   const d = diffDrawings(model.drawing, res.drawing);
   assert.equal(d.missed + d.extra, 0);
+});
+
+// 実物の写真（test/photos/ は手元にだけ置き、公開しない）。あるときだけ、ためす。
+const REAL = new URL('./photos/chromebook-2026-10-09.png', import.meta.url);
+test('実物の写真: Chromebook でとった手書きの図面（細いペン）を、手直しなしで読める', { skip: fs.existsSync(REAL) ? false : '写真が手元にない' }, async () => {
+  const res = readSheet(await fromPNG(fs.readFileSync(REAL)));
+  assert.equal(res.ok, true);
+  assert.deepEqual(res.warnings, []);
+  assert.equal(res.template, 3);
+  // 写真にかいてある図面（側板2枚・底板・後ろの横板）
+  const want = emptyDrawing(getTemplate(3).sizes);
+  drawRect(want.front, 4, 0, 36, 22);
+  drawLine(want.front, 5, 0, 5, 22); drawLine(want.front, 35, 0, 35, 22);
+  for (const v of [1, 14, 18]) drawLine(want.front, 5, v, 35, v);
+  drawRect(want.top, 4, 0, 36, 16);
+  drawLine(want.top, 4, 15, 36, 15); drawLine(want.top, 5, 0, 5, 15); drawLine(want.top, 35, 0, 35, 15);
+  drawRect(want.side, 0, 0, 15, 22);
+  drawRect(want.side, 15, 14, 16, 18);
+  assert.deepEqual(diffDrawings(want, res.drawing), { missed: 0, extra: 0, type: 0, total: 480 });
 });
