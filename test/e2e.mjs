@@ -419,6 +419,14 @@ step('公開ページの入口（フォルダ直下の index.html）から開い
   await p3.waitForURL(/\/dist\/index\.html/);
   await p3.waitForFunction(() => window.__app && window.__app.viewer());
   assert.equal(await p3.title(), '正投影図 3Dクリエイター');
+  // タブに出すマーク（アプリのマーク）が、画像として開ける
+  const icons = await p3.evaluate(() => Promise.all([...document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]')].map((l) => new Promise((done) => {
+    const img = new Image();
+    img.onload = () => done(`${l.rel} ${img.naturalWidth > 0 ? 'ok' : 'ng'}`);
+    img.onerror = () => done(`${l.rel} ng`);
+    img.src = l.href;
+  }))));
+  assert.deepEqual(icons, ['icon ok', 'icon ok', 'apple-touch-icon ok']);
   await p3.close();
 }
 

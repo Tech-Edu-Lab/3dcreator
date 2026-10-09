@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44">
+  <!-- アプリのマーク（画面左上のものと同じ形）。ブラウザのタブに出す。小さくても見えるよう、線だけ少し太い -->
+  <rect x="1" y="1" width="42" height="42" rx="9" fill="#0b62b0"/>
+  <g fill="none" stroke="#ffffff" stroke-width="2.6" stroke-linejoin="round">
+    <rect x="8" y="23" width="15" height="12"/>
+    <rect x="8" y="9" width="15" height="9"/>
+    <rect x="28" y="23" width="8" height="12"/>
+  </g>
+  <path d="M28 9h8v9h-8z" fill="#ffffff" opacity=".28"/>
+</svg>
