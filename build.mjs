@@ -7,7 +7,9 @@
 import { build } from 'esbuild';
 import fs from 'node:fs';
 
-const TITLE = '正投影図 3Dクリエイター';
+// アプリの名前と、サブタイトル。画面の見出し（名前・サブタイトル・ひとこと）は src/app.html に書いている。
+const NAME = 'サンカク３Dメーカー', SUBTITLE = '正投影図 3Dクリエイター';
+const TITLE = `${NAME}｜${SUBTITLE}`; // ブラウザのタブに出る題
 const result = await build({
   entryPoints: ['src/main.js'],
   bundle: true,
@@ -47,7 +49,7 @@ ${js}
 </body>
 </html>
 `;
-const fragment = `<title>${TITLE}</title>
+const fragment = `<title>${NAME}</title>
 <style>
 ${css}
 </style>
@@ -68,7 +70,7 @@ ${icons}
 <script>location.replace('dist/index.html' + location.search + location.hash);</script>
 </head>
 <body>
-<p><a href="dist/index.html">${TITLE}を開く</a></p>
+<p><a href="dist/index.html">${NAME}を開く</a></p>
 </body>
 </html>
 `;

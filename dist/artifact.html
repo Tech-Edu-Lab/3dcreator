@@ -1,4 +1,4 @@
-<title>正投影図 3Dクリエイター</title>
+<title>サンカク３Dメーカー</title>
 <style>
 /* 配置: 左に「紙の図面」、右に「立体」。上の帯に 1→2→3 の手順ボタン。点検結果は赤ペンのコメントとして出す。 */
 :root {
@@ -79,6 +79,8 @@ button { cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand-mark { width: 44px; height: 44px; flex: none; }
 .brand h1 { font-family: var(--font-display); font-weight: 900; font-size: 1.45rem; line-height: 1.2; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+.brand-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; }
+.brand-sub { font-family: var(--font-display); font-weight: 700; font-size: .98rem; color: var(--ink-2); }
 .brand p { margin: 2px 0 0; color: var(--ink-2); font-size: .86rem; }
 
 .steps { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; }
@@ -266,7 +268,10 @@ button { cursor: pointer; }
         <path d="M28 9h8v9h-8z" fill="var(--accent-ink)" opacity=".28"/>
       </svg>
       <div>
-        <h1>正投影図 3Dクリエイター</h1>
+        <div class="brand-title">
+          <h1>サンカク３Dメーカー</h1>
+          <span class="brand-sub">正投影図 3Dクリエイター</span>
+        </div>
         <p>第三角法でかいた図面を、立体にしてたしかめよう</p>
       </div>
     </div>

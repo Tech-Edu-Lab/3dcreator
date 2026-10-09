@@ -77,6 +77,8 @@ button { cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .brand-mark { width: 44px; height: 44px; flex: none; }
 .brand h1 { font-family: var(--font-display); font-weight: 900; font-size: 1.45rem; line-height: 1.2; margin: 0; letter-spacing: .01em; text-wrap: balance; }
+.brand-title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 12px; }
+.brand-sub { font-family: var(--font-display); font-weight: 700; font-size: .98rem; color: var(--ink-2); }
 .brand p { margin: 2px 0 0; color: var(--ink-2); font-size: .86rem; }
 
 .steps { list-style: none; display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; }

@@ -395,7 +395,7 @@ step('アーティファクトとして開いたとき: 印刷ボタンは出さ
   });
   await p2.goto(`file://${wrapped}`);
   await p2.waitForFunction(() => window.__app && window.__app.viewer());
-  assert.equal(await p2.title(), '正投影図 3Dクリエイター');
+  assert.equal(await p2.title(), 'サンカク３Dメーカー');
   await p2.click('#btnStl');
   await p2.click('#btnSheet');
   assert.equal(await p2.isVisible('#btnPrint'), false, '印刷ボタンは出さない');
@@ -418,7 +418,11 @@ step('公開ページの入口（フォルダ直下の index.html）から開い
   await p3.goto(`file://${root}/index.html`);
   await p3.waitForURL(/\/dist\/index\.html/);
   await p3.waitForFunction(() => window.__app && window.__app.viewer());
-  assert.equal(await p3.title(), '正投影図 3Dクリエイター');
+  assert.equal(await p3.title(), 'サンカク３Dメーカー｜正投影図 3Dクリエイター');
+  assert.deepEqual(
+    await p3.evaluate(() => ['.brand h1', '.brand-sub', '.brand p'].map((s) => document.querySelector(s).textContent)),
+    ['サンカク３Dメーカー', '正投影図 3Dクリエイター', '第三角法でかいた図面を、立体にしてたしかめよう'],
+  );
   // タブに出すマーク（アプリのマーク）が、画像として開ける
   const icons = await p3.evaluate(() => Promise.all([...document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]')].map((l) => new Promise((done) => {
     const img = new Image();
