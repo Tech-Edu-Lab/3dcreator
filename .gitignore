@@ -1,0 +1,14 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# 手元だけで使うもの（公開しない）
+CLAUDE.md
+.claude/
