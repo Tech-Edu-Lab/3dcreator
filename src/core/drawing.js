@@ -37,10 +37,9 @@ export function pasteView(dst, src, u0, v0) {
  */
 export function drawingFromProblem(P, sizes, margin = { u: 2, v: 2 }) {
   const d = emptyDrawing(sizes);
-  const ok =
-    pasteView(d.front, P.front, margin.u, margin.v) &&
-    pasteView(d.top, P.top, margin.u, margin.v) &&
-    pasteView(d.side, P.side, margin.u, margin.v);
+  // margin は { u, v }（3つの図で同じ）か、図ごとの { front, top, side }
+  const at = (name) => margin[name] || margin;
+  const ok = VIEW_NAMES.every((name) => pasteView(d[name], P[name], at(name).u, at(name).v));
   return ok ? d : null;
 }
 

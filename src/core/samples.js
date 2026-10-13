@@ -43,6 +43,42 @@ function shelfDrawing(sizes) {
   return { drawing: drawingFromProblem(renderViews(labels, w, d, h), sizes, { u: M, v: M }), w, h, d };
 }
 
+/**
+ * 基本本棚: 側板2枚・底板・後ろの横板（側板の後ろにつく）。
+ * A3横の用紙では、はば32×奥行き16×高さ22マス。1マス10mm・板12mmなら、内のりを 300 にして
+ * はば 324mm（12＋300＋12）にできる。先生が授業で使う基本の作品で、図の位置も先生の図面に合わせてある
+ *（正面図・平面図は左から4マス、右側面図はわくの左はしから。下はわくの下の線から）。
+ * 小さい用紙では、入る大きさにちぢめる。
+ * かくれ線は、「全部かく」の設定のときだけ入れる（「必要なものだけ」では、実線だけで形が決まる）。
+ */
+function basicShelf(sizes, settings = {}) {
+  const w = Math.min(32, sizes.front.cols), h = Math.min(22, sizes.front.rows), d = Math.min(16, sizes.top.rows, sizes.side.cols);
+  const z0 = Math.round((h * 14) / 22), z1 = Math.min(h, z0 + 4); // 横板の高さ
+  const boards = [
+    { x0: 0, x1: 1, y0: 0, y1: d - 1, z0: 0, z1: h }, // 左の側板
+    { x0: w - 1, x1: w, y0: 0, y1: d - 1, z0: 0, z1: h }, // 右の側板
+    { x0: 1, x1: w - 1, y0: 0, y1: d - 1, z0: 0, z1: 1 }, // 底板
+    { x0: 0, x1: w, y0: d - 1, y1: d, z0, z1 }, // 後ろの横板
+  ];
+  const u = Math.min(4, sizes.front.cols - w);
+  const drawing = drawingFromProblem(renderViews(labelsFromBoards(boards, w, d, h), w, d, h), sizes, { front: { u, v: 0 }, top: { u, v: 0 }, side: { u: 0, v: 0 } });
+  return settings.hiddenLines === 'all' ? drawing : strip(drawing);
+}
+
+/**
+ * 基本本棚の、はじめから入れておく寸法（先生の作品の寸法）:
+ * 側板のあいだ（内のり）300mm、側板の奥行き 150mm。板が12mmなら、はば 324・奥行き 162・高さ 220mm になる。
+ * 用紙が小さくて図をちぢめたときは、入れない（マスの数どおりになる）。
+ */
+function basicDims(sizes) {
+  const w = Math.min(32, sizes.front.cols), d = Math.min(16, sizes.top.rows, sizes.side.cols);
+  return {
+    x: { total: null, pins: w === 32 ? { '1-31': 300 } : {} },
+    y: { total: null, pins: d === 16 ? { '0-15': 150 } : {} },
+    z: { total: null, pins: {} },
+  };
+}
+
 // make(sizes, settings): settings.hiddenLines が 'all' のときは、かくれ線を全部かいた図面にする
 export const SAMPLES = [
   {
@@ -57,6 +93,13 @@ export const SAMPLES = [
       drawLine(drawing.side, M, M + 1, M + d, M + 1, DASH);
       return drawing;
     },
+  },
+  {
+    id: 'basic',
+    name: '基本本棚',
+    note: '板4枚（側板2・底板・後ろの横板）。横板は、側板の後ろにつく。',
+    make: basicShelf,
+    dims: basicDims,
   },
   {
     id: 'hidden',
@@ -99,4 +142,10 @@ export const SAMPLES = [
 export function makeSample(id, sizes, settings = {}) {
   const s = SAMPLES.find((x) => x.id === id) || SAMPLES[0];
   return s.make(sizes, settings);
+}
+
+/** 見本にはじめから入れておく寸法（ruler.js の dims の形）。なければ null */
+export function sampleDims(id, sizes) {
+  const s = SAMPLES.find((x) => x.id === id);
+  return s && s.dims ? s.dims(sizes) : null;
 }

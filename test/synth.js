@@ -17,8 +17,9 @@ function hex(c) {
  * 用紙を res 画素/mm でえがく（文字ははぶく）。mono=true で白黒印刷のつもり。
  * oldGrid=true で、はじめの版の用紙（5マスごとの線 0.3mm・わくの線 0.35mm と太かった）にする。
  */
-export function rasterSheet(tpl, settings, res, { mono = false, oldGrid = false } = {}) {
-  const { pageW, pageH, items } = sheetPrimitives(tpl, settings);
+export function rasterSheet(tpl, settings, res, { mono = false, oldGrid = false, figure = null } = {}) {
+  // figure: 用紙にはじめから印刷しておく図面
+  const { pageW, pageH, items } = sheetPrimitives(tpl, settings, figure);
   if (oldGrid) for (const it of items) if (it.t === 'line') it.sw = it.sw === GRID_MAJOR ? 0.3 : it.sw === GRID_EDGE ? 0.35 : it.sw;
   const w = Math.round(pageW * res), h = Math.round(pageH * res);
   const rgb = new Float32Array(w * h * 3).fill(1);

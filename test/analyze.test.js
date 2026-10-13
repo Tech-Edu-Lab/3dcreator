@@ -282,8 +282,9 @@ test('見本: 正しい図面は立体になり、直すところのある図面
       const res = Object.fromEntries(SAMPLES.map((s) => [s.id, analyze(s.make(t.sizes, { hiddenLines }), { thickness: 1, hiddenLines })]));
       const got = Object.fromEntries(Object.entries(res).map(([id, r]) => [id, r.ok ? 'ok' : codes(r).join()]));
       const hidden = hiddenLines === 'all' ? 'NO_MATCH,NO_MATCH' : 'HIDDEN_JOINT';
-      assert.deepEqual(got, { shelf: 'ok', hidden, nothick: 'NOT_BOARD_THICK', noseam: 'NOT_BOARD_JOINED' }, `${t.name} ${hiddenLines}`);
+      assert.deepEqual(got, { shelf: 'ok', basic: 'ok', hidden, nothick: 'NOT_BOARD_THICK', noseam: 'NOT_BOARD_JOINED' }, `${t.name} ${hiddenLines}`);
       assert.equal(res.shelf.model.parts.length, 4);
+      assert.equal(res.basic.model.parts.length, 4, '基本本棚: 側板2・底板・後ろの横板');
       // 「必要なものだけ」の見本は、かくれ線を1本しかかいていないので、のこりをアプリがおぎなう
       if (hiddenLines === 'all') assert.equal(count(res.shelf.model), 0);
       else assert.ok(count(res.shelf.model) > 0);
@@ -291,6 +292,45 @@ test('見本: 正しい図面は立体になり、直すところのある図面
   // 「必要なものだけ」の見本は、「全部かく」の設定では、かくれ線がたりないと言われる
   const t = TEMPLATES[0];
   assert.equal(analyze(SAMPLES[0].make(t.sizes, { hiddenLines: 'needed' }), { thickness: 1, hiddenLines: 'all' }).ok, false);
+});
+
+test('見本「基本本棚」: A3横の用紙では、先生の図面と同じ線になる。内のりを 300 にすると、はば 324mm', async () => {
+  const { makeSample } = await import('../src/core/samples.js');
+  const { getTemplate } = await import('../src/sheet/templates.js');
+  const { emptyDrawing } = await import('../src/core/drawing.js');
+  const { buildRuler, emptyDims } = await import('../src/core/ruler.js');
+  const { viewsEqual } = await import('../src/core/model.js');
+  const sizes = getTemplate(3).sizes;
+  const want = emptyDrawing(sizes);
+  // 正面図: 側板2枚（左から4〜5、35〜36マス）、底板、後ろの横板（高さ14〜18）
+  for (const u of [4, 5, 35, 36]) drawLine(want.front, u, 0, u, 22);
+  drawLine(want.front, 4, 0, 36, 0); drawLine(want.front, 4, 22, 5, 22); drawLine(want.front, 35, 22, 36, 22);
+  for (const v of [1, 14, 18]) drawLine(want.front, 5, v, 35, v);
+  // 平面図: 側板の奥行きは15マス、その後ろに横板
+  drawRect(want.top, 4, 0, 36, 16);
+  drawLine(want.top, 4, 15, 36, 15); drawLine(want.top, 5, 0, 5, 15); drawLine(want.top, 35, 0, 35, 15);
+  // 右側面図: わくの左はしから
+  drawRect(want.side, 0, 0, 15, 22);
+  drawRect(want.side, 15, 14, 16, 18);
+  const got = makeSample('basic', sizes, { hiddenLines: 'needed' });
+  for (const n of ['front', 'top', 'side']) assert.ok(viewsEqual(got[n], want[n]), n);
+  const r = analyze(got, { thickness: 1 });
+  assert.equal(r.ok, true);
+  // 1マス10mm・板12mm: 数字を入れなければ、マスの数どおり（はば 320・奥行き 160・高さ 220）。
+  // 内のりを 300、側板の奥行きを 150 と入れると、はば 12＋300＋12＝324、奥行き 150＋12＝162（先生の図面の寸法）
+  const settings = { scaleMm: 10, boardMm: 12, thickness: 1, boardCheck: true };
+  const dims = emptyDims();
+  assert.deepEqual(buildRuler(r.model, settings, dims).size, [320, 160, 220]);
+  dims.x.pins = { '1-31': 300 };
+  dims.y.pins = { '0-15': 150 };
+  assert.deepEqual(buildRuler(r.model, settings, dims).size, [324, 162, 220]);
+  // 見本には、この寸法がはじめから入っている。用紙が小さくて図をちぢめた向きには、入れない
+  const { sampleDims } = await import('../src/core/samples.js');
+  assert.deepEqual(sampleDims('basic', sizes), dims);
+  assert.deepEqual(buildRuler(r.model, settings, sampleDims('basic', sizes)).size, [324, 162, 220]);
+  // A4横の用紙: はばは同じ32マスなので 300 が入る。奥行きは13マスにちぢめるので、入れない
+  assert.deepEqual(sampleDims('basic', getTemplate(0).sizes), { ...emptyDims(), x: { total: null, pins: { '1-31': 300 } } });
+  assert.equal(sampleDims('shelf', sizes), null);
 });
 
 test('平面図か右側面図の手前と奥を逆にかいた: うら返しではないかと伝える', async () => {

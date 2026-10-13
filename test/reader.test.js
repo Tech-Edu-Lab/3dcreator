@@ -163,6 +163,33 @@ test('「かくれ線は全部かく」の用紙: 写真から、その設定が
   assert.equal(analyze(res.drawing, res.settings).ok, true);
 });
 
+test('「基本本棚」を印刷しておいた用紙: 写真から、印刷した図面が読める。たな板をかきたしても読める', async () => {
+  const { makeSample } = await import('../src/core/samples.js');
+  for (const [tplId, camera] of [[3, { width: 2400, height: 1800 }], [3, CHROMEBOOK.camera], [0, { width: 1800, height: 1350 }]])
+    for (const hiddenLines of ['needed', 'all']) {
+      const t = getTemplate(tplId), settings = { ...SETTINGS, hiddenLines };
+      const figure = makeSample('basic', t.sizes, settings);
+      const raster = rasterSheet(t, settings, t.pageW > 300 ? 8 : 10, { figure });
+      // 何もかきたさずに写真にとる
+      let res = readSheet(photograph(raster, { seed: 5, ...camera }));
+      assert.equal(res.ok, true);
+      assert.deepEqual({ ...diffDrawings(figure, res.drawing), total: 0 }, { missed: 0, extra: 0, type: 0, total: 0 }, `${t.name} ${hiddenLines}`);
+      assert.equal(analyze(res.drawing, res.settings).ok, true);
+      if (tplId !== 3 || hiddenLines !== 'needed') continue;
+      // 生徒が、えんぴつでたな板（厚さ1マス）をかきたす
+      const added = emptyDrawing(t.sizes);
+      drawLine(added.front, 5, 7, 35, 7); drawLine(added.front, 5, 8, 35, 8);
+      drawPencil(raster, added, { seed: 3 });
+      res = readSheet(photograph(raster, { seed: 5, ...camera }));
+      const want = structuredClone(figure);
+      drawLine(want.front, 5, 7, 35, 7); drawLine(want.front, 5, 8, 35, 8);
+      assert.deepEqual({ ...diffDrawings(want, res.drawing), total: 0 }, { missed: 0, extra: 0, type: 0, total: 0 }, 'たな板をかきたした');
+      const r = analyze(res.drawing, res.settings);
+      assert.equal(r.ok, true, r.issues.map((i) => i.code).join());
+      assert.equal(r.model.parts.length, 5);
+    }
+});
+
 test('必要なかくれ線だけをかいた図面の写真: 立体になり、のこりのかくれ線はアプリがおぎなう', () => {
   const t = getTemplate(3);
   const full = fromBoards(bookshelf(30, 15, 22), 30, 15, 22, t.sizes);

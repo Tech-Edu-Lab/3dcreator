@@ -181,6 +181,15 @@ assert.match(pdf.data.toString('latin1'), /\/MediaBox \[0 0 1190\.55 841\.89\]/,
 const png = await save(() => page.click('#btnPng'), 'sheet.png');
 const sheetImg = await fromPNG(png.data);
 assert.deepEqual([sheetImg.width, sheetImg.height], [2480, 1754], 'A3横・150dpi');
+// 「基本本棚」をえらぶと、図面の線が入った用紙になる
+assert.equal((await page.innerHTML('#sheetPreview')).split('stroke="#000000"').length - 1, 0, '白紙には、図面の線がない');
+await page.selectOption('#dlgFigure', 'basic');
+await page.waitForTimeout(200);
+assert.ok((await page.innerHTML('#sheetPreview')).split('stroke="#000000"').length - 1 >= 20, '基本本棚の線が入る');
+await page.screenshot({ path: path.join(out, '05a-sheet-basic.png') });
+const pngBasic = await save(() => page.click('#btnPng'), 'sheet-basic.png');
+assert.match(pngBasic.name, /^hougan-A3yoko3-10mm-kihon-hondana\.png$/);
+await page.selectOption('#dlgFigure', '');
 await page.click('#dlgClose');
 
 step('読みこみ: ブラウザが出した用紙に図面をかき、ななめから写真にとった画像を読む');
@@ -221,6 +230,32 @@ step('読みこみ: 「かくれ線は全部かく」の用紙を読むと、画
   await page.selectOption('#setHidden', 'needed');
   await page.waitForTimeout(300);
   assert.equal(await app(() => window.__app.state.result.ok), true, 'かくれ線が全部かいてある図面は、どちらの設定でも立体になる');
+}
+
+step('読みこみ: 「基本本棚」を印刷した用紙を写真にとると、そのまま基本本棚の立体になる');
+{
+  const r3 = rasterFromImage(await fromPNG(pngBasic.data), tpl);
+  const f3 = path.join(out, 'photo-basic.png');
+  fs.writeFileSync(f3, await toPNG(photograph(r3, { seed: 14, tilt: 0.04, width: 2400, height: 1800 })));
+  await app(() => { window.__app.editor().photo = null; });
+  await page.setInputFiles('#fileInput', f3);
+  await page.waitForFunction(() => document.getElementById('busy').hidden && window.__app.editor().photo);
+  await page.waitForTimeout(500);
+  const got = await app(() => ({ ok: window.__app.state.result.ok, sizes: window.__app.state.shown && window.__app.state.shown.parts.map((p) => p.size.join('×')).sort() }));
+  assert.deepEqual(got, { ok: true, sizes: ['1×15×22', '1×15×22', '30×15×1', '32×1×4'] });
+  await page.screenshot({ path: path.join(out, '06a-basic-photo.png') });
+  // 見本の「基本本棚」も、同じ立体になる
+  await page.selectOption('#sampleSelect', 'basic');
+  await page.waitForTimeout(300);
+  assert.deepEqual(await app(() => window.__app.state.shown.parts.map((p) => p.size.join('×')).sort()), got.sizes);
+  // 見本には、先生の作品の寸法がはじめから入っている: はば 12＋300＋12＝324、奥行き 150＋12＝162、高さ 220
+  assert.match(await page.innerText('#parts'), /はば 324 × 奥行き 162 × 高さ 220/);
+  assert.deepEqual(await app(() => window.__app.state.ruler.size), [324, 162, 220]);
+  await page.screenshot({ path: path.join(out, '06b-basic-sample.png') });
+  // ほかの見本に変えると、寸法はマスの数どおりにもどる
+  await page.selectOption('#sampleSelect', 'shelf');
+  await page.waitForTimeout(300);
+  assert.deepEqual(await app(() => window.__app.state.ruler.size), [300, 150, 220]);
 }
 
 step('読みこみ: 画像のはりつけ（Ctrl+V）と、ドラッグ＆ドロップでも読める');
@@ -372,6 +407,31 @@ await page.setViewportSize({ width: 1280, height: 800 });
 await page.emulateMedia({ colorScheme: 'dark' });
 await page.waitForTimeout(400);
 await page.screenshot({ path: path.join(out, '11-dark.png') });
+
+step('開き直したとき: 新しく開くと前の図面は残らない。同じタブの再読みこみでは残る。設定はおぼえている');
+{
+  await page.selectOption('#sampleSelect', 'shelf');
+  await page.selectOption('#setBoard', '15');
+  await drag('front', 3, 12, 31, 12); // 見本に線を1本かきたす
+  const lines = () => { const d = window.__app.editor().getDrawing(); let c = 0; for (const v of [d.front, d.top, d.side]) for (const a of [v.V, v.H]) for (const x of a) if (x) c++; return c; };
+  const mine = await page.evaluate(lines);
+  // 新しいタブで開く: 見本（本立て）から始まる。設定（板の厚さ 15mm）はそのまま
+  const fresh = await context.newPage();
+  await fresh.goto(`file://${root}/dist/index.html`);
+  await fresh.waitForFunction(() => window.__app && window.__app.viewer());
+  const st2 = await fresh.evaluate(() => ({ tag: !document.getElementById('sampleTag').hidden, sample: window.__app.state.sample, board: window.__app.state.settings.boardMm }));
+  assert.deepEqual(st2, { tag: true, sample: 'shelf', board: 15 });
+  assert.equal(await fresh.evaluate(lines), mine - 28, '前の図面にかきたした線は、ない');
+  await fresh.close();
+  // 同じタブの再読みこみ: かいていた図面が残る
+  await page.reload();
+  await page.waitForFunction(() => window.__app && window.__app.editor() && window.__app.editor().getDrawing());
+  assert.equal(await page.evaluate(lines), mine);
+  assert.equal(await app(() => !document.getElementById('sampleTag').hidden), false);
+  await page.selectOption('#setBoard', '12');
+  await page.selectOption('#sampleSelect', 'shelf');
+  await page.waitForTimeout(300);
+}
 
 step('アーティファクトとして開いたとき: 印刷ボタンは出さず、STL は ZIP に入れて保存する');
 {

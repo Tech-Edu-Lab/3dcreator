@@ -17,9 +17,10 @@ const FONT = "'BIZ UDPGothic','Hiragino Sans','Hiragino Kaku Gothic ProN','Noto 
 /**
  * tpl: 用紙の種類（templates.js）
  * settings: { scaleMm, boardMm, thickness, boardCheck, hiddenLines, gridTone }
+ * figure: はじめからかいておく図面（なければ白紙）
  * もどり値: { pageW, pageH, items, font }
  */
-export function sheetPrimitives(tpl, settings) {
+export function sheetPrimitives(tpl, settings, figure = null) {
   const { pageW, pageH, boxes, info, markers } = tpl;
   const items = [];
   const rect = (x, y, w, h, fill) => items.push({ t: 'rect', x, y, w, h, fill });
@@ -66,6 +67,9 @@ export function sheetPrimitives(tpl, settings) {
     }
   }
 
+  // はじめからかいておく図面（基本の作品など）
+  if (figure) items.push(...figureItems(tpl, figure));
+
   // 図の名前
   const f = boxes.front, tp = boxes.top, sd = boxes.side;
   // 文字はわくの線から 1.5mm 以上はなす（読み取りのとき、線とまちがえないように）
@@ -92,6 +96,46 @@ export function sheetPrimitives(tpl, settings) {
   text(markers[2][0] - MARKER / 2 - 4, fy, 2.5, `${tpl.name}／1マス=${settings.scaleMm}mm／板の厚さ${settings.boardMm}mm（${settings.thickness}マス）`, { anchor: 'end', fill: SUB });
 
   return { pageW, pageH, items, font: FONT };
+}
+
+/**
+ * 図面（drawing: { front, top, side }）を、用紙に印刷する線にする。
+ * 実線は黒の 0.5mm、かくれ線は黒の 0.4mm の破線。こくはっきり印刷されるので、写真からも読み取れる。
+ * まっすぐ続く線は1本にまとめる。実線は、かどが欠けないように、両はしを線の太さの半分だけのばす。
+ */
+export function figureItems(tpl, figure) {
+  const items = [];
+  const SOLID_W = 0.5, DASH_W = 0.4, BLACK = '#000000';
+  const put = (x1, y1, x2, y2, type) => {
+    if (type === 1) {
+      const e = SOLID_W / 2, h = y1 === y2;
+      items.push({ t: 'line', x1: x1 - (h ? e : 0), y1: y1 - (h ? 0 : e), x2: x2 + (h ? e : 0), y2: y2 + (h ? 0 : e), sw: SOLID_W, stroke: BLACK });
+    } else items.push({ t: 'line', x1, y1, x2, y2, sw: DASH_W, stroke: BLACK, dash: [2.6, 1.3] });
+  };
+  for (const name of ['top', 'front', 'side']) {
+    const b = tpl.boxes[name], v = figure[name];
+    if (!v) continue;
+    const X = (u) => b.x + u * CELL, Y = (w) => b.y + b.h - w * CELL;
+    for (let c = 0; c <= v.nu; c++)
+      for (let q = 0; q < v.nv; q++) {
+        const type = v.V[c + q * (v.nu + 1)];
+        if (!type) continue;
+        let e = q + 1;
+        while (e < v.nv && v.V[c + e * (v.nu + 1)] === type) e++;
+        put(X(c), Y(e), X(c), Y(q), type);
+        q = e - 1;
+      }
+    for (let c = 0; c <= v.nv; c++)
+      for (let p = 0; p < v.nu; p++) {
+        const type = v.H[p + c * v.nu];
+        if (!type) continue;
+        let e = p + 1;
+        while (e < v.nu && v.H[e + c * v.nu] === type) e++;
+        put(X(p), Y(c), X(e), Y(c), type);
+        p = e - 1;
+      }
+  }
+  return items;
 }
 
 /** 右上の「かき方のきまり」のわくにかくもの（用紙にも、画面のエディタにも使う） */
@@ -162,8 +206,8 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const n2 = (v) => +v.toFixed(3);
 
 /** SVG の文字列にする（大きさは mm 指定なので、そのまま実寸で印刷できる） */
-export function sheetSvg(tpl, settings) {
-  const { pageW, pageH, items, font } = sheetPrimitives(tpl, settings);
+export function sheetSvg(tpl, settings, figure = null) {
+  const { pageW, pageH, items, font } = sheetPrimitives(tpl, settings, figure);
   const out = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${pageW}mm" height="${pageH}mm" viewBox="0 0 ${pageW} ${pageH}" font-family="${font.replace(/"/g, "'")}">`);
   for (const it of items) {

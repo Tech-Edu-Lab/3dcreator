@@ -10,7 +10,7 @@ import { buildRuler, partSize, emptyDims } from './core/ruler.js';
 import { emptyDrawing, drawingIsEmpty, pasteView, serializeDrawing, deserializeDrawing } from './core/drawing.js';
 import { bounds } from './core/extract.js';
 import { makeView, VIEW_NAMES } from './core/model.js';
-import { SAMPLES, makeSample } from './core/samples.js';
+import { SAMPLES, makeSample, sampleDims } from './core/samples.js';
 import { SheetEditor } from './ui/editor.js';
 import { saveFile, inArtifact, warmUpSave } from './ui/save.js';
 
@@ -59,29 +59,41 @@ function stamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
+// おぼえておくもの:
+//   設定（用紙・1マスの大きさ・板の厚さなど）… 端末におぼえる。次に開いたときも同じ設定になる。
+//   図面と、入れた寸法 … 同じタブを開いている間だけおぼえる（まちがえて再読みこみしても消えない）。
+//     新しく開いたときは、前に使った人の図面が残らないように、見本から始まる。
 function persist() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ settings: state.settings })); } catch { /* 保存できなくても動く */ }
   try {
-    localStorage.setItem(STORE_KEY, JSON.stringify({ settings: state.settings, sample: state.sample, dims: state.dims, drawing: serializeDrawing(editor.getDrawing()) }));
+    sessionStorage.setItem(STORE_KEY, JSON.stringify({ sample: state.sample, dims: state.dims, drawing: serializeDrawing(editor.getDrawing()) }));
   } catch { /* 保存できなくても動く */ }
 }
 
+/** もどり値: { settings（なければ null）, work: { drawing, sample, dims }（このタブでかいていた図面。なければ null） } */
 function restore() {
+  let settings = null, work = null;
   try {
-    const raw = localStorage.getItem(STORE_KEY);
-    if (!raw) return null;
-    const o = JSON.parse(raw);
-    const s = { ...state.settings, ...o.settings };
-    if (!TEMPLATES.some((t) => t.id === s.template) || !SCALES.includes(s.scaleMm) || !BOARD_MM.includes(s.boardMm)) return null;
-    if (s.hiddenLines !== 'all') s.hiddenLines = 'needed';
-    const tpl = getTemplate(s.template);
-    const d = deserializeDrawing(o.drawing);
-    for (const n of VIEW_NAMES) if (d[n].nu !== tpl.sizes[n].cols || d[n].nv !== tpl.sizes[n].rows) return null;
-    const dims = emptyDims();
-    for (const a of ['x', 'y', 'z']) if (o.dims && o.dims[a]) dims[a] = { total: o.dims[a].total ?? null, cells: o.dims[a].cells, pins: { ...(o.dims[a].pins || {}) } };
-    return { settings: s, drawing: d, sample: o.sample || null, dims };
-  } catch {
-    return null;
-  }
+    const o = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    const s = o && { ...state.settings, ...o.settings };
+    if (s && TEMPLATES.some((t) => t.id === s.template) && SCALES.includes(s.scaleMm) && BOARD_MM.includes(s.boardMm)) {
+      if (s.hiddenLines !== 'all') s.hiddenLines = 'needed';
+      settings = s;
+    }
+  } catch { /* こわれていたら、はじめの設定で */ }
+  try {
+    const o = JSON.parse(sessionStorage.getItem(STORE_KEY) || 'null');
+    if (o) {
+      const tpl = getTemplate((settings || state.settings).template);
+      const d = deserializeDrawing(o.drawing);
+      if (VIEW_NAMES.every((n) => d[n].nu === tpl.sizes[n].cols && d[n].nv === tpl.sizes[n].rows)) {
+        const dims = emptyDims();
+        for (const a of ['x', 'y', 'z']) if (o.dims && o.dims[a]) dims[a] = { total: o.dims[a].total ?? null, cells: o.dims[a].cells, pins: { ...(o.dims[a].pins || {}) } };
+        work = { drawing: d, sample: o.sample || null, dims };
+      }
+    }
+  } catch { /* こわれていたら、見本から */ }
+  return { settings, work };
 }
 
 // ---------- 設定 ----------
@@ -133,6 +145,7 @@ function changeTemplate(id) {
   if (state.sample) {
     const d = makeSample(state.sample, tpl.sizes, state.settings);
     if (d) for (const n of VIEW_NAMES) next[n] = d[n];
+    state.dims = sampleDims(state.sample, tpl.sizes) || emptyDims();
   } else if (!drawingIsEmpty(old)) {
     const bb = Object.fromEntries(VIEW_NAMES.map((n) => [n, bounds(old[n])]));
     const moved = {};
@@ -535,8 +548,14 @@ async function loadImage(blob) {
 
 // ---------- 用紙の出力 ----------
 
+/** 用紙にはじめからかいておく図面（「白紙」なら null）。見本と同じ図面を、いまの用紙と設定に合わせてつくる */
+function sheetFigure() {
+  const id = $('dlgFigure').value;
+  return id ? makeSample(id, getTemplate(state.settings.template).sizes, state.settings) : null;
+}
+
 function currentSvg() {
-  return sheetSvg(getTemplate(state.settings.template), state.settings);
+  return sheetSvg(getTemplate(state.settings.template), state.settings, sheetFigure());
 }
 
 function showPreview() {
@@ -560,7 +579,8 @@ async function rasterSheet(dpi) {
 
 function sheetName(ext) {
   const tpl = getTemplate(state.settings.template);
-  return `hougan-${paperName(tpl)}${tpl.landscape ? 'yoko' : 'tate'}${tpl.id}-${state.settings.scaleMm}mm.${ext}`;
+  const figure = $('dlgFigure').value === 'basic' ? '-kihon-hondana' : '';
+  return `hougan-${paperName(tpl)}${tpl.landscape ? 'yoko' : 'tate'}${tpl.id}-${state.settings.scaleMm}mm${figure}.${ext}`;
 }
 
 function reportSave(r) {
@@ -653,7 +673,7 @@ function openSample(id) {
   if (!d) return;
   editor.photo = null; editor.uncertain = null;
   state.sample = id;
-  state.dims = emptyDims();
+  state.dims = sampleDims(id, tpl.sizes) || emptyDims();
   editor.setDrawing(d);
   $('sampleTag').hidden = false;
   showHint();
@@ -681,8 +701,9 @@ function start() {
   if (document.fonts && document.fonts.addEventListener) document.fonts.addEventListener('loadingdone', () => { if (editor) editor.render(); });
 
   fillSelects();
-  const saved = restore();
-  if (saved) { state.settings = saved.settings; state.sample = saved.sample; state.dims = saved.dims; }
+  const { settings: savedSettings, work: saved } = restore();
+  if (savedSettings) state.settings = savedSettings;
+  if (saved) { state.sample = saved.sample; state.dims = saved.dims; }
   editor = new SheetEditor($('sheet'), $('sheetWrap'), {
     onChange: (info) => {
       if (info && info.templateChanged) { state.settings.template = editor.tpl.id; showSettings(); }
@@ -743,6 +764,7 @@ function start() {
   $('btnLoad').addEventListener('click', () => $('fileInput').click());
   $('fileInput').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; loadImage(f); });
   $('btnBuild').addEventListener('click', () => run({ byButton: true }));
+  $('dlgFigure').addEventListener('change', showPreview);
   $('btnPdf').addEventListener('click', savePdf);
   $('btnPng').addEventListener('click', savePng);
   $('btnPrint').addEventListener('click', printSheet);

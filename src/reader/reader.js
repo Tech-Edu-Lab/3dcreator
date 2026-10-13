@@ -580,10 +580,17 @@ function readLines(ink, rw, rh, tpl, ox, oy, R, shift) {
   }
   // 印刷された方眼の線のこさ（base）と、えんぴつの線のこさ（hi）から、しきい値を決める
   // base: 何もかいていない線分のこさ（印刷された方眼の線のこさ）。spread: そのばらつき。
-  const base = mids.map((m) => percentile(m, 0.5));
-  const spread = mids.map((m, c) => percentile(m.map((v) => Math.abs(v - base[c])), 0.5));
   const hi = percentile(all, 0.995);
+  const base = [], spread = [];
   const thrOf = (cls) => Math.max(base[cls] + Math.max(0.07, 5 * spread[cls]), 0.1, Math.min(0.33 * hi, 0.25));
+  for (let c = 0; c < 3; c++) {
+    let m = mids[c];
+    // わくの線は本数が少なく、図をわくいっぱいにかくと、半分以上に線がのることがある。
+    // そのときだけ（はっきり線がかいてあるもの ＝ えんぴつの線のこさの6割より上、が3割をこえるとき）、それをのぞいてはかる。
+    if (c === 2) { const clean = m.filter((v) => v <= 0.6 * hi); if (clean.length >= 8 && clean.length < 0.7 * m.length) m = clean; }
+    base[c] = percentile(m, 0.5);
+    spread[c] = percentile(m.map((v) => Math.abs(v - base[c])), 0.5);
+  }
   // うすい線のしきい値（まわりの線とつながっているときだけ使う）
   const lowOf = (cls) => Math.max(base[cls] + Math.max(0.04, 3 * spread[cls]), 0.5 * thrOf(cls));
 
